@@ -1,14 +1,22 @@
 import { Handler } from "express";
-import { prisma } from "../database";
 import {
   CreateLeadRequestSchema,
   GetLeadsRequestSchema,
   UpdateLeadRequestSchema,
 } from "../schemas/LeadsRequestSchema";
 import { HttpError } from "../errors/HttpError";
-import { Prisma } from "@prisma/client";
+import {
+  LeadsRepository,
+  LeadWhereParams,
+} from "../repositories/LeadsRepository";
 
 export class LeadsController {
+  private leadsRepository: LeadsRepository;
+
+  constructor(leadsRepository: LeadsRepository) {
+    this.leadsRepository = leadsRepository;
+  }
+
   index: Handler = async (req, res, next) => {
     try {
       const query = GetLeadsRequestSchema.parse(req.query);
@@ -21,27 +29,40 @@ export class LeadsController {
         order = "asc",
       } = query;
 
-      const where: Prisma.LeadWhereInput = {};
+      const limit = +pageSize;
+      const offset = (+page - 1) * limit;
 
-      if (name) where.name = { contains: name, mode: "insensitive" };
+      const where: LeadWhereParams = {};
+
+      if (name) where.name = { like: name, mode: "insensitive" };
       if (status) where.status = status;
 
-      const leads = await prisma.lead.findMany({
+      const leads = await this.leadsRepository.find({
         where,
-        // Ex: se o page for 2 e o page size for 10, vai tirar 1 do page e multiplicar por 10. Então pulando 10 resultados, e aparecendo a partir do 11
-        skip: (+page - 1) * +pageSize,
-        orderBy: { [sortBy]: order },
+        sortBy,
+        order,
+        limit,
+        offset,
       });
 
-      const total = await prisma.lead.count({ where });
+      // const leads = await prisma.lead.findMany({
+      //   where,
+      //   skip: (pageNumber - 1) * pageSizeNumber,
+      //   take: pageSizeNumber,
+      //   orderBy: { [sortBy]: order }
+      // })
+
+      // const total = await prisma.lead.count({ where })
+
+      const total = await this.leadsRepository.count(where);
 
       res.json({
         data: leads,
         pagination: {
           page: +page,
-          pageSize: +pageSize,
+          pageSize: limit,
           total,
-          totalPages: Math.ceil(total / +pageSize),
+          totalPages: Math.ceil(total / +limit),
         },
       });
     } catch (error) {
@@ -53,9 +74,10 @@ export class LeadsController {
     try {
       const body = CreateLeadRequestSchema.parse(req.body);
 
-      const newLead = await prisma.lead.create({
-        data: body,
-      });
+      const newLead = await this.leadsRepository.create(body);
+      // const newLead = await prisma.lead.create({
+      //   data: body
+      // })
 
       res.status(201).json(newLead);
     } catch (error) {
@@ -65,13 +87,14 @@ export class LeadsController {
 
   show: Handler = async (req, res, next) => {
     try {
-      const lead = await prisma.lead.findUnique({
-        where: { id: +req.params.id },
-        include: {
-          groups: true,
-          campaigns: true,
-        },
-      });
+      const lead = await this.leadsRepository.findById(+req.params.id);
+      // const lead = await prisma.lead.findUnique({
+      //   where: { id: Number(req.params.id) },
+      //   include: {
+      //     groups: true,
+      //     campaigns: true
+      //   }
+      // })
 
       if (!lead) throw new HttpError(404, "Lead not found");
 
@@ -84,11 +107,13 @@ export class LeadsController {
   update: Handler = async (req, res, next) => {
     try {
       const body = UpdateLeadRequestSchema.parse(req.body);
+      const id = +req.params.id;
 
-      const lead = await prisma.lead.findUnique({
-        where: { id: +req.params.id },
-      });
-      if (!lead) throw new HttpError(404, "lead não encontrado");
+      const lead = await this.leadsRepository.findById(id);
+      // const lead = await prisma.lead.findUnique({
+      //   where: { id },
+      // });
+      if (!lead) throw new HttpError(404, "Lead not found");
 
       if (
         lead.status === "New" &&
@@ -102,16 +127,18 @@ export class LeadsController {
       }
 
       if (body.status && body.status === "Archived") {
-        const now = new Date()
+        const now = new Date();
         const diffTime = Math.abs(now.getTime() - lead.updatedAt.getTime())
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-        if (diffDays > 180) throw new HttpError(400, "A lead can only be archived after 6 months of inactivity.")
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        if (diffDays > 180)
+          throw new HttpError(
+            400,
+            "A lead can only be archived after 6 months of inactivity."
+          );
       }
 
-      const updatedLead = await prisma.lead.update({
-        data: body,
-        where: { id: +req.params.id },
-      });
+      const updatedLead = await this.leadsRepository.updateById(id, body);
+      // const updatedLead = await prisma.lead.update({ data: body, where: { id } })
 
       res.json(updatedLead);
     } catch (error) {
@@ -121,14 +148,17 @@ export class LeadsController {
 
   delete: Handler = async (req, res, next) => {
     try {
-      const leadExists = await prisma.lead.findUnique({
-        where: { id: +req.params.id },
-      });
-      if (!leadExists) throw new HttpError(404, "lead não encontrado");
+      const id = +req.params.id;
+      const leadExists = await this.leadsRepository.findById(id);
+      // const leadExists = await prisma.lead.findUnique({
+      //   where: { id },
+      // });
+      if (!leadExists) throw new HttpError(404, "Lead not found");
 
-      const deletedLead = await prisma.lead.delete({
-        where: { id: +req.params.id },
-      });
+      const deletedLead = await this.leadsRepository.deleteById(id);
+      // const deletedLead = await prisma.lead.delete({
+      //   where: { id: +req.params.id },
+      // });
 
       res.json(deletedLead);
     } catch (error) {
